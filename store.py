@@ -372,20 +372,52 @@ class FilingStore:
 
         await self._execute_with_retry(_do_inc)
 
-    async def get_recent_filings(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Retrieve most recently accepted filings ordered by acceptance_datetime descending."""
+    async def is_filing_alerted(self, accession_number: str) -> bool:
+        """Check if accession number has already been alerted (alert_status == 'sent')."""
         conn = self._conn or await self.connect()
         async with conn.execute(
-            """
+            "SELECT 1 FROM seen_filings WHERE accession_number = ? AND alert_status = 'sent' LIMIT 1;",
+            (accession_number.strip(),),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row is not None
+
+    async def get_recent_filings(
+        self,
+        forms: Optional[List[str]] = None,
+        ticker: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve most recently accepted filings filtered by tracked forms and optional ticker."""
+        conn = self._conn or await self.connect()
+        clauses = []
+        params: List[Any] = []
+
+        if forms:
+            placeholders = ",".join("?" for _ in forms)
+            clauses.append(f"form IN ({placeholders})")
+            params.extend(forms)
+        else:
+            clauses.append("(form LIKE '8-K%')")
+
+        if ticker and ticker.strip().upper() != "ALL":
+            clean_ticker = ticker.strip().upper()
+            clauses.append("(ticker = ? OR ticker LIKE ?)")
+            params.extend([clean_ticker, f"%{clean_ticker}%"])
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"""
             SELECT accession_number, cik, ticker, form, filing_date,
                    acceptance_datetime, items, primary_document,
                    first_seen_at, alerted_at, alert_status
             FROM seen_filings
+            {where_sql}
             ORDER BY acceptance_datetime DESC
             LIMIT ?;
-            """,
-            (limit,),
-        ) as cursor:
+        """
+        params.append(limit)
+
+        async with conn.execute(query, tuple(params)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
@@ -410,3 +442,30 @@ class FilingStore:
             await conn.commit()
 
         await self._execute_with_retry(_do_set)
+
+    async def get_watchlist_stats(self, watchlist: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Return counts of total 8-Ks, alerted 8-Ks, and latest filing date per ticker."""
+        conn = self._conn or await self.connect()
+        stats: Dict[str, Dict[str, Any]] = {}
+        for ticker in watchlist:
+            clean_ticker = ticker.strip().upper()
+            async with conn.execute(
+                """
+                SELECT count(*) as total_8k,
+                       sum(CASE WHEN alert_status = 'sent' THEN 1 ELSE 0 END) as alerted_count,
+                       max(filing_date) as latest_date
+                FROM seen_filings
+                WHERE (ticker = ? OR ticker LIKE ?) AND form LIKE '8-K%';
+                """,
+                (clean_ticker, f"%{clean_ticker}%"),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    stats[clean_ticker] = {
+                        "total_8k": row["total_8k"] or 0,
+                        "alerted_count": row["alerted_count"] or 0,
+                        "latest_date": row["latest_date"] or None,
+                    }
+                else:
+                    stats[clean_ticker] = {"total_8k": 0, "alerted_count": 0, "latest_date": None}
+        return stats

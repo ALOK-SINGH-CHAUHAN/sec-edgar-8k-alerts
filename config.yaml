@@ -11,6 +11,11 @@ watchlist:
 
 # SEC fair-access and rate limit compliance settings
 - AMAT
+- C-PN
+- PLTR
+- AMD
+- AMZN
+- COIN
 sec:
   # SEC fair-access policy format: "AppName/1.0 (ContactEmail@example.com)"
   user_agent: "EdgarAlertPoller/1.0 (trader.alert@domain-research.com)"

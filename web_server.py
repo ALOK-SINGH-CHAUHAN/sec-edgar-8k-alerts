@@ -75,7 +75,8 @@ class RemoveTickerRequest(BaseModel):
 
 
 class BackfillRequest(BaseModel):
-    days: int = 3
+    days: int = 90
+    ticker: Optional[str] = None
 
 
 @app.on_event("startup")
@@ -132,18 +133,26 @@ async def get_status():
     is_fast = is_market_fast_hours(GLOBAL_CONFIG.poll)
     uptime_sec = int(time.monotonic() - GLOBAL_POLLER.start_time) if GLOBAL_POLLER.start_time else 0
 
-    # Build rich watchlist info
+    # Build rich watchlist info with 8-K filing statistics
+    wl_stats = await GLOBAL_STORE.get_watchlist_stats(GLOBAL_CONFIG.watchlist) if GLOBAL_STORE else {}
     watchlist_info = []
     for ticker in GLOBAL_CONFIG.watchlist:
         cik = GLOBAL_CLIENT.resolve_ticker(ticker) if GLOBAL_CLIENT else None
         title = GLOBAL_CLIENT.cik_to_name.get(cik, "Unknown") if (GLOBAL_CLIENT and cik) else "Unknown"
         is_seeded = await GLOBAL_STORE.is_cik_seeded(cik) if (GLOBAL_STORE and cik) else False
+        st = wl_stats.get(ticker, {})
+        alerted_count = st.get("alerted_count", 0)
+        total_8k = st.get("total_8k", 0)
+        latest_date = st.get("latest_date")
         watchlist_info.append(
             {
                 "ticker": ticker,
                 "cik": cik,
                 "company_name": title,
                 "seeded": is_seeded,
+                "alerted_count": alerted_count,
+                "total_8k": total_8k,
+                "latest_date": latest_date,
             }
         )
 
@@ -167,11 +176,12 @@ async def get_status():
 
 
 @app.get("/api/filings")
-async def get_filings(limit: int = 50):
+async def get_filings(limit: int = 50, ticker: Optional[str] = None):
     if not GLOBAL_STORE:
         return []
 
-    raw_filings = await GLOBAL_STORE.get_recent_filings(limit=limit)
+    forms = GLOBAL_CONFIG.forms if GLOBAL_CONFIG else ["8-K", "8-K/A"]
+    raw_filings = await GLOBAL_STORE.get_recent_filings(forms=forms, ticker=ticker, limit=limit)
     formatted = []
 
     for f in raw_filings:
@@ -220,7 +230,7 @@ async def get_logs():
 
 
 @app.post("/api/watchlist/add")
-async def add_ticker_endpoint(req: AddTickerRequest):
+async def add_ticker_endpoint(req: AddTickerRequest, background_tasks: BackgroundTasks):
     ticker = req.ticker.strip().upper()
     if not ticker:
         raise HTTPException(status_code=400, detail="Ticker symbol cannot be empty")
@@ -237,7 +247,11 @@ async def add_ticker_endpoint(req: AddTickerRequest):
     GLOBAL_CONFIG = load_config("config.yaml")
     if GLOBAL_POLLER:
         GLOBAL_POLLER.config = GLOBAL_CONFIG
-    return {"status": "success", "message": f"Ticker '{ticker}' added to watchlist."}
+
+    # Trigger background 90-day alert backfill for the newly added ticker
+    background_tasks.add_task(cmd_backfill, 90, "config.yaml", ticker)
+
+    return {"status": "success", "message": f"Ticker '{ticker}' added to watchlist. Alerting recent 8-Ks..."}
 
 
 @app.post("/api/watchlist/remove")
@@ -262,9 +276,15 @@ async def test_alert_endpoint():
 
 @app.post("/api/action/backfill")
 async def backfill_endpoint(req: BackfillRequest, background_tasks: BackgroundTasks):
-    days = max(1, min(req.days, 90))
-    background_tasks.add_task(cmd_backfill, days, "config.yaml")
-    return {"status": "success", "message": f"Backfill triggered for past {days} days in background."}
+    days = max(1, min(req.days, 180))
+    target_ticker = req.ticker.strip().upper() if req.ticker else None
+    background_tasks.add_task(cmd_backfill, days, "config.yaml", target_ticker)
+    msg = (
+        f"Backfill triggered for past {days} days for {target_ticker}."
+        if target_ticker
+        else f"Backfill triggered for past {days} days across watchlist."
+    )
+    return {"status": "success", "message": msg}
 
 
 @app.get("/api/search")
@@ -733,6 +753,68 @@ async def dashboard_html():
       background: rgba(244, 63, 94, 0.1);
     }
 
+    .btn-icon-action:hover {
+      color: var(--accent-cyan);
+      background: rgba(6, 182, 212, 0.1);
+    }
+
+    /* Ticker Filter Bar */
+    .ticker-filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.85rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .filter-chip {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 20px;
+      background: var(--bg-surface-elevated);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      user-select: none;
+    }
+
+    .filter-chip:hover {
+      color: #fff;
+      border-color: rgba(99, 102, 241, 0.4);
+      background: rgba(99, 102, 241, 0.1);
+    }
+
+    .filter-chip.active {
+      background: var(--accent-primary);
+      color: #ffffff;
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .badge-count {
+      font-size: 0.65rem;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .filter-chip.active .badge-count {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    .badge-emerald {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+
     /* Filings Table / Cards */
     .filings-list {
       display: flex;
@@ -945,7 +1027,7 @@ async def dashboard_html():
 
       <div class="header-actions">
         <button class="btn btn-secondary" onclick="triggerTestAlert()">🔔 Test Alert</button>
-        <button class="btn btn-secondary" onclick="triggerBackfill()">↺ Backfill (7d)</button>
+        <button class="btn btn-secondary" onclick="triggerBackfill()">↺ Alert Recent 8-Ks (90d)</button>
         <button class="btn btn-primary" onclick="refreshData()">⚡ Refresh Now</button>
       </div>
     </div>
@@ -1040,8 +1122,20 @@ async def dashboard_html():
       <!-- Right Column: Live Filings Feed -->
       <div class="panel">
         <div class="panel-header">
-          <span class="panel-title">🚨 Recent Filings & 8-K Alerts</span>
+          <div>
+            <span class="panel-title">🚨 Recent Filings & 8-K Alerts</span>
+            <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">
+              Filter by stock below or view entire watchlist stream
+            </div>
+          </div>
           <span style="font-size: 0.8rem; color: var(--text-dim); font-family: var(--font-mono);">Dual ET / IST Timestamps</span>
+        </div>
+
+        <!-- Filter by Ticker Bar -->
+        <div class="ticker-filter-bar" id="ticker-filter-bar">
+          <div class="filter-chip active" onclick="setTickerFilter('ALL')">
+            <span>⚡ ALL STOCKS</span>
+          </div>
         </div>
 
         <div class="filings-list" id="filings-container">
@@ -1065,6 +1159,35 @@ async def dashboard_html():
   </main>
 
   <script>
+    let currentTickerFilter = 'ALL';
+    let cachedWatchlist = [];
+
+    function setTickerFilter(ticker) {
+      currentTickerFilter = ticker;
+      renderTickerFilterBar();
+      fetchFilings();
+    }
+
+    function renderTickerFilterBar() {
+      const bar = document.getElementById('ticker-filter-bar');
+      if (!bar) return;
+      let html = `
+        <div class="filter-chip ${currentTickerFilter === 'ALL' ? 'active' : ''}" onclick="setTickerFilter('ALL')">
+          <span>⚡ ALL STOCKS</span>
+        </div>
+      `;
+      cachedWatchlist.forEach(w => {
+        const isAct = currentTickerFilter === w.ticker;
+        html += `
+          <div class="filter-chip ${isAct ? 'active' : ''}" onclick="setTickerFilter('${w.ticker}')">
+            <span>${w.ticker}</span>
+            ${w.total_8k ? `<span class="badge-count">${w.total_8k}</span>` : ''}
+          </div>
+        `;
+      });
+      bar.innerHTML = html;
+    }
+
     async function fetchStatus() {
       try {
         const res = await fetch('/api/status');
@@ -1084,21 +1207,36 @@ async def dashboard_html():
         document.getElementById('val-watchlist-count').innerText = data.watchlist.length;
         document.getElementById('badge-ticker-count').innerText = `${data.watchlist.length} Tickers`;
 
-        // Render watchlist
+        // Render watchlist and filter bar
+        cachedWatchlist = data.watchlist || [];
+        renderTickerFilterBar();
+
         const wlContainer = document.getElementById('watchlist-container');
         wlContainer.innerHTML = '';
-        data.watchlist.forEach(item => {
+        cachedWatchlist.forEach(item => {
           const div = document.createElement('div');
           div.className = 'watchlist-item';
+
+          let badgeHtml = '';
+          if (item.alerted_count > 0) {
+            badgeHtml = `<span class="badge badge-emerald" title="${item.alerted_count} 8-Ks alerted">ACTIVE (${item.alerted_count})</span>`;
+          } else if (item.seeded) {
+            badgeHtml = `<span class="badge badge-std" title="Tracked in database">TRACKED</span>`;
+          } else {
+            badgeHtml = `<span class="badge badge-high" title="Newly added">NEW</span>`;
+          }
+
           div.innerHTML = `
-            <div>
-              <div class="ticker-symbol">${item.ticker}</div>
+            <div style="cursor: pointer; flex: 1;" onclick="setTickerFilter('${item.ticker}')" title="Filter stream to ${item.ticker}">
+              <div class="ticker-symbol" style="display: flex; align-items: center; gap: 0.35rem;">
+                ${item.ticker}
+                <span style="font-size: 0.65rem; color: var(--accent-cyan); font-weight: normal;">🔍</span>
+              </div>
               <div class="ticker-meta" title="${item.company_name}">${item.company_name}</div>
             </div>
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <span class="badge ${item.seeded ? 'badge-std' : 'badge-high'}" style="font-size: 0.65rem;">
-                ${item.seeded ? 'SEEDED' : 'NEW'}
-              </span>
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+              ${badgeHtml}
+              <button class="btn-icon btn-icon-action" title="Alert recent 8-Ks for ${item.ticker}" onclick="triggerTickerBackfill('${item.ticker}')">⚡</button>
               <button class="btn-icon" title="Remove ${item.ticker}" onclick="removeTicker('${item.ticker}')">✕</button>
             </div>
           `;
@@ -1112,12 +1250,13 @@ async def dashboard_html():
 
     async function fetchFilings() {
       try {
-        const res = await fetch('/api/filings?limit=50');
+        const tParam = (currentTickerFilter && currentTickerFilter !== 'ALL') ? `&ticker=${encodeURIComponent(currentTickerFilter)}` : '';
+        const res = await fetch(`/api/filings?limit=50${tParam}`);
         const filings = await res.json();
         const container = document.getElementById('filings-container');
         
         if (!filings || filings.length === 0) {
-          container.innerHTML = '<div class="empty-state">No filings recorded yet. Run a Backfill or wait for the next market cycle.</div>';
+          container.innerHTML = `<div class="empty-state">No 8-K filings recorded yet for ${currentTickerFilter === 'ALL' ? 'the watchlist' : currentTickerFilter}. Click "↺ Alert Recent 8-Ks" or wait for next filing.</div>`;
           return;
         }
 
@@ -1308,14 +1447,29 @@ async def dashboard_html():
       }
     }
 
-    async function triggerBackfill() {
+    async function triggerTickerBackfill(ticker) {
       try {
-        await fetch('/api/action/backfill', {
+        const res = await fetch('/api/action/backfill', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ days: 7 })
+          body: JSON.stringify({ days: 90, ticker: ticker })
         });
-        alert("Backfill triggered for past 7 days in background!");
+        const data = await res.json();
+        alert(data.message || `Alerting recent 8-Ks for ${ticker}...`);
+        setTimeout(refreshData, 1500);
+      } catch (e) {
+        alert("Backfill request failed");
+      }
+    }
+
+    async function triggerBackfill() {
+      try {
+        const res = await fetch('/api/action/backfill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ days: 90 })
+        });
+        alert("Alert backfill triggered for past 90 days across all watchlist stocks!");
         setTimeout(refreshData, 2000);
       } catch (e) {
         alert("Backfill trigger failed");

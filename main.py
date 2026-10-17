@@ -151,6 +151,10 @@ async def cmd_add_ticker(ticker: str, config_path: str = "config.yaml") -> int:
         await client.close()
         await store.close()
 
+    # Automatically backfill and dispatch alerts for recent 8-Ks (last 90 days)
+    print(f"Triggering initial 90-day alert backfill for '{norm_symbol}'...")
+    await cmd_backfill(days=90, config_path=config_path, target_ticker=norm_symbol)
+
     return 0
 
 
@@ -221,8 +225,10 @@ async def cmd_test_alert(config_path: str = "config.yaml") -> int:
     return 0 if all_success else 1
 
 
-async def cmd_backfill(days: int = 3, config_path: str = "config.yaml") -> int:
-    """Fetch filings from the last N days for the watchlist and alert on unseen ones."""
+async def cmd_backfill(
+    days: int = 3, config_path: str = "config.yaml", target_ticker: Optional[str] = None
+) -> int:
+    """Fetch filings from the last N days for the watchlist and alert on unalerted ones."""
     try:
         config = load_config(config_path)
     except Exception as e:
@@ -230,7 +236,8 @@ async def cmd_backfill(days: int = 3, config_path: str = "config.yaml") -> int:
         return 1
 
     setup_logging(config.log_level)
-    print(f"Running backfill for last {days} days across watchlist: {', '.join(config.watchlist)}")
+    scan_watchlist = [target_ticker.upper()] if target_ticker else config.watchlist
+    print(f"Running backfill for last {days} days across: {', '.join(scan_watchlist)}")
 
     store = FilingStore(config.database_path)
     await store.connect()
@@ -249,6 +256,9 @@ async def cmd_backfill(days: int = 3, config_path: str = "config.yaml") -> int:
     tracked_forms = set(config.forms)
 
     for cik, tickers in cik_map.items():
+        if target_ticker and not any(t.upper() == target_ticker.upper() for t in tickers):
+            continue
+
         print(f"\nScanning filings for CIK {cik:010d} ({', '.join(tickers)})...")
         filings = await client.fetch_submissions(cik)
         if not filings:
@@ -264,14 +274,15 @@ async def cmd_backfill(days: int = 3, config_path: str = "config.yaml") -> int:
                 continue
 
             total_checked += 1
-            is_seen = await store.is_filing_seen(acc)
-            if is_seen:
-                print(f"  • {form} ({f_date}) {acc} — Already recorded. Skipping.")
+            is_alerted = await store.is_filing_alerted(acc)
+            if is_alerted:
+                print(f"  • {form} ({f_date}) {acc} — Already alerted. Skipping.")
                 continue
 
-            print(f"  ★ NEW FILING: {form} ({f_date}) {acc} — Dispatched as [BACKFILL] alert.")
+            print(f"  ★ ALERTING FILING: {form} ({f_date}) {acc} — Dispatched as [BACKFILL] alert.")
             await store.record_new_filing(filing, tickers)
             await poller.process_new_filing(filing, tickers, is_backfill=True)
+            await store.mark_filing_alerted(acc, status="sent")
             new_alerts_sent += 1
 
     print(
@@ -317,8 +328,14 @@ def main() -> None:
     backfill_parser.add_argument(
         "--days",
         type=int,
-        default=3,
-        help="Number of past days to check for unseen filings (default: 3)",
+        default=90,
+        help="Number of past days to check for unalerted filings (default: 90)",
+    )
+    backfill_parser.add_argument(
+        "--ticker",
+        type=str,
+        default=None,
+        help="Optional specific ticker symbol to backfill (default: all watchlist tickers)",
     )
 
     # web command
@@ -337,7 +354,7 @@ def main() -> None:
     elif args.command == "test-alert":
         sys.exit(asyncio.run(cmd_test_alert(args.config)))
     elif args.command == "backfill":
-        sys.exit(asyncio.run(cmd_backfill(args.days, args.config)))
+        sys.exit(asyncio.run(cmd_backfill(args.days, args.config, args.ticker)))
     elif args.command == "web":
         from web_server import start_server
         start_server(args.host, args.port)
