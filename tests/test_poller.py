@@ -110,6 +110,31 @@ async def test_cik_grouping_and_silent_seeding(tmp_path, sample_submissions_aapl
     assert len(new_filings_2) == 1
     assert new_filings_2[0]["accession_number"] == "0000320193-26-999999"
 
+    # Test Atom feed backup triggering submission fetch for unseen filing
+    atom_called = False
+
+    async def mock_fetch_atom():
+        return [
+            {
+                "accession_number": "0000320193-26-888888",
+                "cik": 320193,
+                "form": "8-K",
+                "acceptance_datetime": "2026-10-17T16:00:00-04:00",
+                "title": "8-K - Apple Inc. (0000320193)",
+            }
+        ]
+
+    async def mock_poll_cik_from_atom(cik, tickers):
+        nonlocal atom_called
+        atom_called = True
+        return []
+
+    client.fetch_atom_feed = mock_fetch_atom
+    poller.poll_cik = mock_poll_cik_from_atom
+    await poller.poll_atom_feed({320193: ["AAPL"]})
+    assert atom_called is True
+
     await client.close()
     await store.close()
     await notifier.close()
+

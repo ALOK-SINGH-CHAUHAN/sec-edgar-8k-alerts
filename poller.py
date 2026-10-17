@@ -278,6 +278,22 @@ class EdgarPoller:
             )
             self.last_heartbeat_time = now
 
+    async def poll_atom_feed(self, cik_map: Dict[int, List[str]]) -> None:
+        """Backup polling of global SEC Atom feed filtered to watchlist CIKs."""
+        entries = await self.client.fetch_atom_feed()
+        self.requests_made += 1
+        for entry in entries:
+            cik = entry.get("cik")
+            acc = entry.get("accession_number")
+            if cik in cik_map and acc:
+                is_seen = await self.store.is_filing_seen(acc)
+                if not is_seen:
+                    logger.info("Atom feed detected new filing %s for CIK %d", acc, cik)
+                    # Poll submissions for this CIK to pull complete filing items and preview
+                    new_filings = await self.poll_cik(cik, cik_map[cik])
+                    for filing in new_filings:
+                        await self.process_new_filing(filing, cik_map[cik])
+
     async def run_cycle(self) -> None:
         """Execute one complete polling cycle across all unique CIKs."""
         is_fast = is_market_fast_hours(self.config.poll)
@@ -320,6 +336,14 @@ class EdgarPoller:
                     await asyncio.wait_for(self._shutdown_event.wait(), timeout=stagger_delay)
                 except asyncio.TimeoutError:
                     pass
+
+        # Optional Atom feed backup polling
+        if self.config.sec.atom_feed_enabled and not self._shutdown_event.is_set():
+            try:
+                await self.poll_atom_feed(cik_map)
+            except Exception as e:
+                self.errors_count += 1
+                logger.error("Error in Atom feed backup poll: %s", e)
 
         # Flush any pending/queued alerts
         await self.flush_pending_alerts()
