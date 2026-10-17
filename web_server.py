@@ -267,6 +267,51 @@ async def backfill_endpoint(req: BackfillRequest, background_tasks: BackgroundTa
     return {"status": "success", "message": f"Backfill triggered for past {days} days in background."}
 
 
+@app.get("/api/search")
+async def search_stocks(q: str = ""):
+    """Search all 10,000+ SEC corporate tickers and company names."""
+    if not GLOBAL_CLIENT or not q.strip():
+        return []
+
+    query = q.strip().upper()
+    query_lower = q.strip().lower()
+    watchlist_set = set(GLOBAL_CONFIG.watchlist) if GLOBAL_CONFIG else set()
+
+    exact_matches = []
+    prefix_ticker_matches = []
+    name_matches = []
+    seen_ciks = set()
+
+    for cik, tickers in GLOBAL_CLIENT.cik_to_tickers.items():
+        name = GLOBAL_CLIENT.cik_to_name.get(cik, "Unknown")
+        name_lower = name.lower()
+
+        for t in tickers:
+            t_upper = t.upper()
+            is_on_wl = any(w.upper() == t_upper for w in watchlist_set)
+            item = {
+                "ticker": t,
+                "company_name": name,
+                "cik": cik,
+                "is_on_watchlist": is_on_wl,
+            }
+
+            if t_upper == query:
+                if cik not in seen_ciks:
+                    exact_matches.append(item)
+                    seen_ciks.add(cik)
+            elif t_upper.startswith(query):
+                if cik not in seen_ciks:
+                    prefix_ticker_matches.append(item)
+                    seen_ciks.add(cik)
+            elif query_lower in name_lower and cik not in seen_ciks:
+                name_matches.append(item)
+                seen_ciks.add(cik)
+
+    results = exact_matches + prefix_ticker_matches[:12] + name_matches[:12]
+    return results[:20]
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_html():
     return """<!DOCTYPE html>
@@ -568,6 +613,69 @@ async def dashboard_html():
 
     .input-text:focus {
       border-color: var(--accent-primary);
+    }
+
+    /* Live Search Dropdown & Quick Add */
+    .search-container {
+      position: relative;
+      margin-bottom: 0.85rem;
+    }
+
+    .search-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: #121622;
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      border-radius: var(--radius-sm);
+      max-height: 290px;
+      overflow-y: auto;
+      z-index: 100;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+      display: none;
+      margin-top: 4px;
+    }
+
+    .search-result-item {
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.15s;
+    }
+
+    .search-result-item:hover {
+      background: rgba(99, 102, 241, 0.15);
+    }
+
+    .quick-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 1rem;
+    }
+
+    .pill {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+
+    .pill:hover {
+      color: #ffffff;
+      border-color: var(--accent-cyan);
+      background: rgba(6, 182, 212, 0.15);
+      transform: translateY(-1px);
     }
 
     .watchlist-list {
@@ -900,11 +1008,30 @@ async def dashboard_html():
           <span class="badge badge-std" id="badge-ticker-count">0 Tickers</span>
         </div>
 
-        <div class="ticker-add-box">
-          <input type="text" id="new-ticker-input" class="input-text" placeholder="Add Ticker (e.g. NVDA)" onkeydown="if(event.key==='Enter') addTicker()">
-          <button class="btn btn-primary" onclick="addTicker()">+ Add</button>
+        <!-- Global SEC Stock Search Bar -->
+        <div class="search-container">
+          <input type="text" id="stock-search-input" class="input-text" style="width: 100%;" placeholder="🔍 Search any stock or company (e.g. TSLA, Meta, AMZN, PLTR)..." oninput="handleSearchInput(this.value)" autocomplete="off">
+          <div id="search-dropdown" class="search-dropdown">
+            <!-- Autocomplete matches rendered here -->
+          </div>
         </div>
 
+        <!-- Quick Add Popular Catalyst Stocks -->
+        <div style="margin-bottom: 0.85rem;">
+          <div style="font-size: 0.68rem; color: var(--text-dim); margin-bottom: 0.35rem; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Popular Catalysts (Click to Add):</div>
+          <div class="quick-pills">
+            <span class="pill" onclick="addTickerBySymbol('TSLA')">+ TSLA</span>
+            <span class="pill" onclick="addTickerBySymbol('AMZN')">+ AMZN</span>
+            <span class="pill" onclick="addTickerBySymbol('META')">+ META</span>
+            <span class="pill" onclick="addTickerBySymbol('GOOGL')">+ GOOGL</span>
+            <span class="pill" onclick="addTickerBySymbol('PLTR')">+ PLTR</span>
+            <span class="pill" onclick="addTickerBySymbol('AMD')">+ AMD</span>
+            <span class="pill" onclick="addTickerBySymbol('COIN')">+ COIN</span>
+            <span class="pill" onclick="addTickerBySymbol('NFLX')">+ NFLX</span>
+          </div>
+        </div>
+
+        <div style="font-size: 0.72rem; color: var(--text-dim); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase;">Active Watched Stocks:</div>
         <div class="watchlist-list" id="watchlist-container">
           <!-- Tickers rendered here -->
         </div>
@@ -1070,29 +1197,90 @@ async def dashboard_html():
       }
     }
 
-    async function addTicker() {
-      const input = document.getElementById('new-ticker-input');
-      const val = input.value.trim().toUpperCase();
-      if (!val) return;
+    let searchTimeout = null;
 
-      input.disabled = true;
+    function handleSearchInput(val) {
+      clearTimeout(searchTimeout);
+      const query = val.trim();
+      const dropdown = document.getElementById('search-dropdown');
+      
+      if (query.length < 1) {
+        dropdown.style.display = 'none';
+        dropdown.innerHTML = '';
+        return;
+      }
+
+      searchTimeout = setTimeout(async () => {
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+          const matches = await res.json();
+          renderSearchResults(matches);
+        } catch (e) {
+          console.error("Search error", e);
+        }
+      }, 180);
+    }
+
+    function renderSearchResults(matches) {
+      const dropdown = document.getElementById('search-dropdown');
+      if (!matches || matches.length === 0) {
+        dropdown.innerHTML = '<div style="padding: 0.75rem; color: var(--text-dim); text-align: center;">No matching SEC corporate tickers found</div>';
+        dropdown.style.display = 'block';
+        return;
+      }
+
+      dropdown.innerHTML = matches.map(m => `
+        <div class="search-result-item">
+          <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span style="font-family: var(--font-mono); font-weight: 800; color: #fff;">${m.ticker}</span>
+              <span class="badge badge-std" style="font-size: 0.65rem;">CIK: ${m.cik}</span>
+            </div>
+            <div style="font-size: 0.75rem; color: var(--text-dim); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${m.company_name}">
+              ${m.company_name}
+            </div>
+          </div>
+          <div>
+            ${m.is_on_watchlist 
+              ? '<span class="badge badge-std" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); font-size: 0.7rem;">✓ Watched</span>' 
+              : `<button class="btn btn-primary" style="padding: 3px 9px; font-size: 0.72rem;" onclick="addTickerBySymbol('${m.ticker}')">+ Add</button>`
+            }
+          </div>
+        </div>
+      `).join('');
+
+      dropdown.style.display = 'block';
+    }
+
+    // Close dropdown on click outside
+    document.addEventListener('click', (e) => {
+      const dropdown = document.getElementById('search-dropdown');
+      const input = document.getElementById('stock-search-input');
+      if (dropdown && !dropdown.contains(e.target) && e.target !== input) {
+        dropdown.style.display = 'none';
+      }
+    });
+
+    async function addTickerBySymbol(ticker) {
+      const dropdown = document.getElementById('search-dropdown');
+      if (dropdown) dropdown.style.display = 'none';
+      const input = document.getElementById('stock-search-input');
+      if (input) input.value = '';
+
       try {
         const res = await fetch('/api/watchlist/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ticker: val })
+          body: JSON.stringify({ ticker: ticker.toUpperCase() })
         });
         const data = await res.json();
         if (res.ok) {
-          input.value = '';
           refreshData();
         } else {
           alert(data.detail || "Error adding ticker");
         }
       } catch (e) {
         alert("Failed to communicate with server");
-      } finally {
-        input.disabled = false;
       }
     }
 
@@ -1151,9 +1339,12 @@ async def dashboard_html():
 """
 
 
-def start_server(host: str = "127.0.0.1", port: int = 8000):
+def start_server(host: Optional[str] = None, port: Optional[int] = None):
     """Run uvicorn server serving the interactive dashboard."""
-    uvicorn.run("web_server:app", host=host, port=port, log_level="info", reload=False)
+    import os
+    h = host or os.getenv("HOST", "0.0.0.0")
+    p = port or int(os.getenv("PORT", "8000"))
+    uvicorn.run("web_server:app", host=h, port=p, log_level="info", reload=False)
 
 
 if __name__ == "__main__":
