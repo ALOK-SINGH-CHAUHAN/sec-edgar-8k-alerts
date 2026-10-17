@@ -36,7 +36,7 @@ class SECConfig(BaseModel):
     max_requests_per_second: float = Field(default=8.0, ge=0.5, le=10.0)
     ticker_map_refresh_hours: int = Field(default=24, ge=1)
     atom_feed_enabled: bool = Field(default=False)
-    cooldown_seconds_on_403: int = Field(default=300, ge=10)
+    cooldown_seconds_on_403: int = Field(default=300, ge=1)
 
     @field_validator("user_agent")
     @classmethod
