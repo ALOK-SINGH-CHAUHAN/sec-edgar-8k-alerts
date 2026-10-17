@@ -309,6 +309,23 @@ class FilingStore:
         )
         await conn.commit()
 
+    async def get_recent_filings(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve most recently accepted filings ordered by acceptance_datetime descending."""
+        conn = self._conn or await self.connect()
+        async with conn.execute(
+            """
+            SELECT accession_number, cik, ticker, form, filing_date,
+                   acceptance_datetime, items, primary_document,
+                   first_seen_at, alerted_at, alert_status
+            FROM seen_filings
+            ORDER BY acceptance_datetime DESC
+            LIMIT ?;
+            """,
+            (limit,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
     async def get_meta(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Fetch value from meta key-value store."""
         conn = self._conn or await self.connect()

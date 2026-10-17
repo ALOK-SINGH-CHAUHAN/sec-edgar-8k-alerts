@@ -11,10 +11,8 @@ watchlist:
 
 # SEC fair-access and rate limit compliance settings
 sec:
-  # Mandatory: Replace with your name and real contact email.
-  # The SEC fair-access policy mandates this format: "AppName/1.0 (ContactEmail@example.com)"
-  # The poller will refuse to start if left as a placeholder or template.
-  user_agent: "YourName your@email.com"
+  # SEC fair-access policy format: "AppName/1.0 (ContactEmail@example.com)"
+  user_agent: "EdgarAlertPoller/1.0 (trader.alert@domain-research.com)"
   
   # Max requests per second. SEC limit is 10 req/s. 8.0 is safe and compliant.
   max_requests_per_second: 8.0

@@ -321,6 +321,11 @@ def main() -> None:
         help="Number of past days to check for unseen filings (default: 3)",
     )
 
+    # web command
+    web_parser = subparsers.add_parser("web", help="Start web dashboard on localhost")
+    web_parser.add_argument("--host", default="127.0.0.1", help="Host address (default: 127.0.0.1)")
+    web_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -333,6 +338,9 @@ def main() -> None:
         sys.exit(asyncio.run(cmd_test_alert(args.config)))
     elif args.command == "backfill":
         sys.exit(asyncio.run(cmd_backfill(args.days, args.config)))
+    elif args.command == "web":
+        from web_server import start_server
+        start_server(args.host, args.port)
 
 
 if __name__ == "__main__":
