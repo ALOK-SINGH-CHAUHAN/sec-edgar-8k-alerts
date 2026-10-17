@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Secrets and environment variables
+.env
+*.env
+!.env.example
+
+# Bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite databases & persistent runtime data
+*.db
+*.sqlite
+*.sqlite3
+data/
+cache/
+logs/
+
+# OS specific
+.DS_Store
+Thumbs.db

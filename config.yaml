@@ -1,0 +1,100 @@
+# ==============================================================================
+# SEC EDGAR 8-K Alert Poller Configuration
+# ==============================================================================
+
+# Watchlist of stock tickers to monitor
+watchlist:
+  - AAPL
+  - MSFT
+  - NVDA
+  - BRK-B
+
+# SEC fair-access and rate limit compliance settings
+sec:
+  # Mandatory: Replace with your name and real contact email.
+  # The SEC fair-access policy mandates this format: "AppName/1.0 (ContactEmail@example.com)"
+  # The poller will refuse to start if left as a placeholder or template.
+  user_agent: "YourName your@email.com"
+  
+  # Max requests per second. SEC limit is 10 req/s. 8.0 is safe and compliant.
+  max_requests_per_second: 8.0
+  
+  # Ticker to CIK mapping refresh frequency (in hours)
+  ticker_map_refresh_hours: 24
+  
+  # Optional backup Atom feed polling once per cycle
+  atom_feed_enabled: false
+  
+  # Cooldown pause in seconds if repeated 403 Forbidden responses occur
+  cooldown_seconds_on_403: 300
+
+# Polling intervals and market-hours awareness
+poll:
+  fast_interval_seconds: 10   # Active during market hours (04:00 - 20:00 ET weekdays)
+  slow_interval_seconds: 60   # Active off-hours, weekends, and holidays
+  fast_window_start: "04:00"  # Pre-market start in America/New_York
+  fast_window_end: "20:00"    # After-hours end in America/New_York
+  timezone: "America/New_York"
+  holidays:
+    - "2026-01-01"  # New Year's Day
+    - "2026-01-19"  # Martin Luther King Jr. Day
+    - "2026-02-16"  # Washington's Birthday (Presidents' Day)
+    - "2026-04-03"  # Good Friday
+    - "2026-05-25"  # Memorial Day
+    - "2026-06-19"  # Juneteenth National Independence Day
+    - "2026-07-03"  # Independence Day (Observed)
+    - "2026-09-07"  # Labor Day
+    - "2026-11-26"  # Thanksgiving Day
+    - "2026-12-25"  # Christmas Day
+
+# Tracked SEC filing forms
+forms:
+  - "8-K"
+  - "8-K/A"
+  # Uncomment additional forms as desired:
+  # - "10-Q"
+  # - "10-K"
+  # - "4"
+  # - "SC 13D"
+  # - "SC 13G"
+
+# Alert channel configuration
+alerts:
+  # Available channels: console, telegram, email
+  channels:
+    - console
+    - telegram
+  
+  telegram:
+    # Optional here: recommend setting via TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars
+    bot_token: ""
+    chat_id: ""
+
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: ""
+    # Password set via SMTP_PASSWORD env var
+    smtp_password: ""
+    to_email: ""
+    from_email: ""
+
+# Quiet hours policy
+quiet_hours:
+  enabled: false
+  start: "22:00"              # HH:MM
+  end: "08:00"                # HH:MM
+  timezone: "Asia/Kolkata"    # Recipient local timezone
+  mode: "queue"               # "queue" (delivers at end of quiet hours) or "suppress" (drops)
+  high_priority_bypasses: true # 2.02, 1.01, 1.03, etc. bypass quiet hours
+
+# Document preview extraction
+document_preview:
+  enabled: false
+  max_chars: 500
+  timeout_seconds: 3.0
+
+# Storage & Logging
+database_path: "data/edgar_alerts.db"
+log_level: "INFO"
