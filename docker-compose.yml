@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  edgar-poller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: edgar-8k-poller
+    restart: unless-stopped
+    volumes:
+      # Persistent SQLite database and SEC ticker cache
+      - ./data:/app/data
+      # Mount config.yaml
+      - ./config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - TZ=America/New_York
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

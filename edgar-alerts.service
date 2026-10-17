@@ -1,0 +1,20 @@
+[Unit]
+Description=SEC EDGAR 8-K Real-Time Alert Poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=edgar
+Group=edgar
+WorkingDirectory=/opt/edgar-alerts
+EnvironmentFile=/opt/edgar-alerts/.env
+ExecStart=/opt/edgar-alerts/.venv/bin/python /opt/edgar-alerts/main.py run
+Restart=always
+RestartSec=10s
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
